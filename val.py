@@ -40,6 +40,25 @@ def save_one_txt(predn, save_conf, shape, file):
             f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
 
+def save_metrics_one_csv(stats_one, number_of_classes, img_name):
+    # Calculate metrics
+    if len(stats_one[3]) == 0:  # empty image
+        return f"{img_name},-1,0,0,0,0,0\n"
+    stats_one = list(map(np.asarray, stats_one))
+    precision, recall, ap, f1_score, used_classes = ap_per_class(*stats_one, plot=False)
+    ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+    number_of_targets = np.bincount(stats_one[3].astype(np.int64), minlength=number_of_classes)  # number of targets per class
+
+    # Save total results
+    print_format = "%s,%i,%i,%.3g,%.3g,%.3g,%.3g\n"
+    csv_string = print_format % (img_name, -1, number_of_targets.sum(), precision.mean(), recall.mean(), ap50.mean(), ap.mean())
+
+    # Save results per class
+    for i, c in enumerate(used_classes):
+        csv_string += print_format % (img_name, c, number_of_targets[c], precision[i], recall[i], ap50[i], ap[i])
+    return csv_string
+
+
 def save_one_json(predn, jdict, path, class_map):
     # Save one JSON result {"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}
     image_id = int(path.stem) if path.stem.isnumeric() else path.stem
@@ -92,6 +111,7 @@ def run(data,
         save_hybrid=False,  # save label+prediction hybrid results to *.txt
         save_conf=False,  # save confidences in --save-txt labels
         save_json=False,  # save a COCO-JSON results file
+        save_csv=False,  # save metric results to *.csv
         project='runs/val',  # save to project/name
         name='exp',  # save to project/name
         exist_ok=False,  # existing project/name ok, do not increment
@@ -155,6 +175,7 @@ def run(data,
     p, r, f1, mp, mr, map50, map, t0, t1, t2 = 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
+    csv_string = ""
     for batch_i, (img, targets, paths, shapes) in enumerate(tqdm(dataloader, desc=s)):
         t_ = time_sync()
         img = img.to(device, non_blocking=True)
@@ -216,6 +237,8 @@ def run(data,
                 save_one_txt(predn, save_conf, shape, file=save_dir / 'labels' / (path.stem + '.txt'))
             if save_json:
                 save_one_json(predn, jdict, path, class_map)  # append to COCO-JSON dictionary
+            if save_csv:
+                csv_string += save_metrics_one_csv(stats[-1], nc, path.stem)
             callbacks.on_val_image_end(pred, predn, path, names, img[si])
 
         # Plot images
@@ -227,6 +250,8 @@ def run(data,
 
     # Compute statistics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy
+    if save_csv:
+        csv_string += save_metrics_one_csv(stats, nc, "__TOTAL__")
     if len(stats) and stats[0].any():
         p, r, ap, f1, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
@@ -281,6 +306,14 @@ def run(data,
         except Exception as e:
             print(f'pycocotools unable to run: {e}')
 
+    # Save CSV
+    if save_csv and len(csv_string):
+        w = Path(weights[0] if isinstance(weights, list) else weights).stem if weights is not None else ''  # weights
+        csv_path= str(save_dir / f"{w}_metrics.csv")
+        with open(csv_path, 'w') as f:
+            print("Img,Class,Labels,Precision,Recall,mAP@.5,mAP@.5:.95", file=f)
+            print(csv_string, end='', file=f)
+
     # Return results
     model.float()  # for training
     if not training:
@@ -309,6 +342,7 @@ def parse_opt():
     parser.add_argument('--save-hybrid', action='store_true', help='save label+prediction hybrid results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--save-json', action='store_true', help='save a COCO-JSON results file')
+    parser.add_argument('--save-csv', action='store_true', help='save metric results to *.csv')
     parser.add_argument('--project', default='runs/val', help='save to project/name')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
