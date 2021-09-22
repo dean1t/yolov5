@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import pickle
 from pathlib import Path
 from threading import Thread
 
@@ -174,7 +175,7 @@ def run(data,
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
     p, r, f1, mp, mr, map50, map, t0, t1, t2 = 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.
     loss = torch.zeros(3, device=device)
-    jdict, stats, ap, ap_class = [], [], [], []
+    jdict, stats, ap, ap_class, total_result = [], [], [], [], []
     csv_string = ""
     for batch_i, (img, targets, paths, shapes) in enumerate(tqdm(dataloader, desc=s)):
         t_ = time_sync()
@@ -212,6 +213,18 @@ def run(data,
             if len(pred) == 0:
                 if nl:
                     stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.Tensor(), torch.Tensor(), tcls))
+                    tbox = xywh2xyxy(labels[:, 1:5])
+                    scale_coords(img[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
+                    labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
+                    total_result.append((
+                        path.stem,                      # filename
+                        np.array([]),                   # predicted bboxes
+                        labelsn[:, 1:].cpu().numpy(),   # target bboxes
+                        np.zeros((0, niou), dtype=bool),# true-positives
+                        np.array([]),                   # confidences
+                        np.array([]),                   # predicted cls
+                        tcls                            # target cls
+                    ))
                 continue
 
             # Predictions
@@ -231,6 +244,15 @@ def run(data,
             else:
                 correct = torch.zeros(pred.shape[0], niou, dtype=torch.bool)
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))  # (correct, conf, pcls, tcls)
+            total_result.append((
+                path.stem,                      # filename
+                predn[:, :4].cpu().numpy(),     # predicted bboxes
+                labelsn[:, 1:].cpu().numpy(),   # target bboxes
+                correct.cpu().numpy(),          # true-positives
+                pred[:, 4].cpu().numpy(),       # confidences
+                pred[:, 5].cpu().numpy(),       # predicted cls
+                tcls                            # target cls
+            ))
 
             # Save/log
             if save_txt:
@@ -313,6 +335,11 @@ def run(data,
         with open(csv_path, 'w') as f:
             print("Img,Class,Labels,Precision,Recall,mAP@.5,mAP@.5:.95", file=f)
             print(csv_string, end='', file=f)
+
+    # Save PKL
+    with open(str(save_dir / f"{w}_stats.pkl"), 'wb') as f:
+        pickle.dump(total_result, f)
+    # np.savez(str(save_dir / f"{w}_stats.npz"), tp=stats[0], conf=stats[1], pred_cls=stats[2], target_cls=stats[3])
 
     # Return results
     model.float()  # for training
