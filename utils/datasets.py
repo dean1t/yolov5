@@ -358,10 +358,19 @@ class LoadStreams:  # multiple IP or RTSP cameras
         return len(self.sources)  # 1E12 frames = 32 streams at 30 FPS for 30 years
 
 
-def img2label_paths(img_paths):
+def img2label_paths_old(img_paths):
     # Define label paths as a function of image paths
     sa, sb = os.sep + 'images' + os.sep, os.sep + 'labels' + os.sep  # /images/, /labels/ substrings
     return [sb.join(x.rsplit(sa, 1)).rsplit('.', 1)[0] + '.txt' for x in img_paths]
+
+def img2label_paths(img_paths):
+    # Define label paths as a function of image paths
+    # expected input image fnames:  path_to_datasets/dataset_name/image_name.jpg
+    # result label fnames:          path_to_datasets/labels/image_name.txt
+    return [str(Path(cur).parent / '..' / 'labels' / Path(cur).with_suffix('.txt').name) for cur in img_paths]
+    if label_dir is None:
+        return img2label_paths_old(img_paths)
+    return [os.path.join(label_dir, os.path.basename(cur).rsplit('.', 1)[0] + '.txt') for cur in img_paths]
 
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
